@@ -1,0 +1,588 @@
+#!/bin/bash
+# -----------------------------------------
+#        NAME: nsvhm
+# DESCRIPTION: NSVHM - Nginx Simple Virtual Host Manager
+#              This script is used to manager nginx virtual hosts
+#              With this script you can enable, disable, edit, remove and
+#              create new virtual hosts with given template
+#       USAGE: See nsvhm --help
+# REQUIPMENTS: bash, sed, grep, cat, ln, rm, tput, mkdir
+#      AUTHOR: bosha
+#     WEBSITE: http://the-bosha.ru
+#     VERSION: 0.1
+#     LICENSE: GNU GPLv3
+# -----------------------------------------
+# The GNU License
+# -----------------------------------------
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# -----------------------------------------
+
+# Variables #{{{
+NGINX_DIR="/etc/nginx"
+NGINX_CONF="$NGINX_DIR/nginx.conf"
+EN_HOSTDIR="$NGINX_DIR/sites-enabled"
+AV_HOSTDIR="$NGINX_DIR/sites-available"
+OPT_COUNT=0
+DIR2LIST=''
+
+# Sample template
+read -d '' VHOST_TEMPLATE <<-"_EOF_"
+server {
+
+    listen   80;
+    server_name {HOST};
+
+    root /var/www/{HOST}/html;
+    access_log  /var/www/{HOST}/log/access.log;
+    error_log  /var/www/{HOST}/log/error.log warn;
+
+    index index.php;
+
+    location / {
+        try_files $uri $uri/ /index.php?url=$request_uri;
+    }
+
+    location ~ \.php$ {
+        fastcgi_pass unix:/var/run/php5-fpm.sock;
+        include fastcgi_params;
+    }
+}
+_EOF_
+
+# Some requipments for proper script work
+# -----------------------------------------
+declare -a requipments=(''
+    'nginx'
+    'ln'
+    'rm'
+    'cat'
+    'mkdir'
+    'tput'
+)
+#}}}
+
+#    FUNCTION: promptyn()#{{{
+# DESCRIPTION: Asking for user confiramtion of action
+#     PARAM 1: Question to show
+#      RETURN: True if user confirmed or in batch
+#              mode, false otherwise
+# -----------------------------------------------------
+promptyn () {
+
+    if [ ! -z $flag_batch ]; then
+        return 0
+    fi
+
+    if [ -z "$1" ]; then
+        1="Confirm?"
+    fi
+
+    while true; do
+        read -p "$1 (y/n): " yn
+        case $yn in
+            [Yy]* ) return 0;;
+            [Nn]* ) return 1;;
+            ""    ) return 0;;
+            * ) echo "Please answer yes or no (y/n).";;
+        esac
+    done
+}
+#}}}
+
+#    FUNCTION: end() #{{{
+# DESCRIPTION: Show given message and exit
+#              with code if specified
+#     PARAM 1: Message to show before exit
+#     PARAM 2: Exit code. If not specified - 0 used
+# -----------------------------------------------------
+end() {
+    if [ ! -z "$1" ]; then
+        echo "$1"
+    fi
+    if [ ! -z "$2" ]; then
+        exit "$2"
+    fi
+    exit 0
+}
+#}}}
+
+#    FUNCTION: out_err()#{{{
+# DESCRIPTION: Show message with red foreground colour
+#     PARAM 1: Message to show
+# -----------------------------------------------------
+out_err() {
+    # TODO: find out why this not works like other
+    echo "$(tput setaf 1)$1$(tput sgr 0)"
+}
+#}}}
+
+#    FUNCTION: out_succ()#{{{
+# DESCRIPTION: Show message with green foreground colour
+#     PARAM 1: Message to show
+# -----------------------------------------------------
+out_succ() {
+    echo "$(tput setaf 2)$1$(out_def)"
+}
+#}}}
+
+#    FUNCTION: out_warn()#{{{
+# DESCRIPTION: Show message with yellow foreground colour
+#     PARAM 1: Message to show
+# -----------------------------------------------------
+out_warn() {
+    echo "$(tput setaf 3)$1$(out_def)"
+}
+#}}}
+
+#    FUNCTION: out_bold()#{{{
+# DESCRIPTION: Show message with yellow foreground colour
+#     PARAM 1: Message to show
+# -----------------------------------------------------
+out_bold() {
+    echo "$(tput bold)$1$(out_def)"
+}
+#}}}
+
+#    FUNCTION: out_def()#{{{
+# DESCRIPTION: Restore to default output params
+# -----------------------------------------------------
+out_def() {
+    echo "$(tput sgr 0)"
+}
+#}}}
+
+#    FUNCTION: die() #{{{
+# DESCRIPTION: Show given error message and exit
+#              with code if specified
+#     PARAM 1: Message to show before exit
+# -----------------------------------------------------
+die() {
+    if [ -z "$1" ]; then
+        end "" 1
+    else
+        # TODO: find out why this not works like other
+        out_err "ERROR: $1" 1
+        end "" 1
+    fi
+}
+#}}}
+
+#    FUNCTION: usage()#{{{
+# DESCRIPTION: Show help message for this script
+# -----------------------------------------------------
+usage() {
+    cat << EOF
+usage: "$0" [options]
+
+Simple script for managing nginx virtual hosts.
+
+OPTIONS:
+-h, --help              Show this help
+-r, --restart           Restart nginx after host managing
+-f, --force             Force nginx configuration testing
+-v, --vhost             Virtual host name
+-e, --enable            Enable virtual host
+-d, --disable           Disable virtual host
+-l, --list              List files in directory. Can be combined with -e or -d options
+-c, --create            Create virtual host from template
+-t, --template          Specify template file
+-E, --edit              Edit host
+-R, --remove            Remove host
+
+EOF
+}
+#}}}
+
+# Parsing command line args #{{{
+# -----------------------------------------
+PARSEDOPTS=$(getopt -n "$0"  -o h,r,f,e,d,l,c,t:,E,R,v:,b --long "help,restart,force,enable,disable,list,create,template:,edit,remove,vhost:,batch"  -- "$@")
+
+if [[ "$#" -eq 0 ]]; then
+    usage
+    end
+fi
+
+eval set -- "$PARSEDOPTS"
+
+while true;
+do
+    case "$1" in
+        -h|--help)
+            usage
+            end
+            shift;;
+        -r|--restart)
+            nginx_restart=true
+            shift;;
+        -f|--force)
+            nginx_force_check=true
+            shift;;
+        -v|--vhost)
+            vhost="$2"
+            shift 2;;
+        -e|--enable)
+            flag_action='enable'
+            action=true
+            DIR2LIST=$AV_HOSTDIR
+            ((OPT_COUNT++))
+            shift;;
+        -d|--disable)
+            flag_action='disable'
+            action=true
+            DIR2LIST=$EN_HOSTDIR
+            ((OPT_COUNT++))
+            shift;;
+        -l|--list)
+            flag_list=true
+            shift;;
+        -c|--create)
+            flag_action='create'
+            action=true
+            ((OPT_COUNT++))
+            shift;;
+        -t|--template)
+            template_file="$2"
+            shift 2;;
+        -E|--edit)
+            flag_action='edit'
+            action=true
+            DIR2LIST=$AV_HOSTDIR
+            ((OPT_COUNT++))
+            shift;;
+        -R|--remove)
+            flag_action='remove'
+            action=true
+            DIR2LIST=$AV_HOSTDIR
+            ((OPT_COUNT++))
+            shift;;
+        -b|--batch)
+            flag_batch=true
+            shift;;
+        --)
+            shift
+            break;;
+    esac
+done
+#}}}
+
+#    FUNCTION: vhost_enable()#{{{
+# DESCRIPTION: enable virtual host
+# -----------------------------------------------------
+vhost_enable() {
+    if ln -s "$AV_HOSTDIR"/"$vhost" "$EN_HOSTDIR" &> /dev/null ; then
+        out_succ "Virtual host file {"$vhost"} succesful enabled!"
+
+        if [ ! -z "$nginx_force_check" ]; then
+            end "$(out_warn) Nginx check forced."
+        fi
+
+        if nginx -t &> /dev/null ; then
+           out_succ "Configuration test - [OK]"
+        else
+           rm "$EN_HOSTDIR"/"$vhost" &> /dev/null
+           if [ ! -z "$flag_create" ] && [ -f "$AV_HOSTDIR"/"$vhost" ]; then
+               rm "$AV_HOSTDIR"/"$vhost" &> /dev/null
+           fi
+           die "ERROR: Nginx configuration test failed. Reverting changes"
+        fi
+    else
+        die "ERROR: failed to copy virtual host file to "$EN_HOST". Problem with rights?"
+    fi
+}
+#}}}
+
+#    FUNCTION: vhost_disable()#{{{
+# DESCRIPTION: disable virtual host
+# -----------------------------------------------------
+vhost_disable() {
+    if rm "$EN_HOSTDIR"/"$vhost" &> /dev/null ; then
+        out_succ "{"$vhost"} successful disabled!"
+    else
+        die "No vhost: {"$vhost"} found."
+    fi
+}
+#}}}
+
+#    FUNCTION: vhost_create()#{{{
+# DESCRIPTION: create new virtual host
+# -----------------------------------------------------
+vhost_create() {
+
+    if [ -z "$VHOST_TEMPLATE" ] && [ -z "$template_file" ]; then
+        die "no template define or used"
+    fi
+
+    if [ -z "$vhost" ]; then
+        while true; do
+            read -p "Vhost name not defined. Enter one (Ctrl-C to abort): " vhost
+            if [ ! -z "$vhost" ]; then
+                break
+            fi
+        done
+    fi
+
+    while true; do
+        if [ -f "$AV_HOSTDIR"/"$vhost" ] || [ -z "$vhost" ]; then
+            if [ ! -z "$vhost" ]; then
+                out_warn ""$vhost" - already exists."
+            fi
+            if promptyn "Wanna specify another name?"; then
+                read -p "Vhost name: " vhost
+                continue
+            else
+                end "$(out_warn)Aborting"
+            fi
+        else
+            break
+        fi
+    done
+
+    if [ ! -z "$template_file" ]; then
+        if [ -f "$template_file" ] && [ -r "$template_file" ]; then
+            VHOST_TEMPLATE=`cat "$template_file"`
+        fi
+    fi
+
+    VHOST_TEMPLATE=$(echo "$VHOST_TEMPLATE" | sed -e "s/{HOST}/"$vhost"/g")
+    VHOST_ROOT=$(echo "$VHOST_TEMPLATE" | grep "root" |
+                                          sed -e 's/root//g' \
+                                          -e 's/^[ \t]*//' \
+                                          -e 's/\;$//g' \
+                                          -e 's/\ .*//g')
+    VHOST_ERRORLOG_FILE=$(echo "$VHOST_TEMPLATE" | grep "error_log" |
+                                                   sed -e 's/error_log//g' \
+                                                   -e 's/^[ \t]*//' \
+                                                   -e 's/\;$//g' \
+                                                   -e 's/\ .*//g')
+    VHOST_ACCESSLOG_FILE=$(echo "$VHOST_TEMPLATE" | grep "access_log" |
+                                                   sed -e 's/access_log//g' \
+                                                   -e 's/^[ \t]*//' \
+                                                   -e 's/\;$//g' \
+                                                   -e 's/\ .*//g')
+    VHOST_ERRORLOG_DIR=${VHOST_ERRORLOG_FILE%/*}
+    VHOST_ACCESSLOG_DIR=${VHOST_ACCESSLOG_FILE%/*}
+
+    if [ ! -d "$VHOST_ROOT" ]; then
+        if promptyn "Root directory does not exists. Wanna create one?"; then
+            if mkdir -p "$VHOST_ROOT" &> /dev/null; then
+                out_succ "Directory "$VHOST_ROOT" successful created."
+                have_created_dirs=true
+            elif ! promptyn "Could not create directory. Wanna continue without creating? "; then
+                die "Aborting.."
+            fi
+        else
+            nginx_force_check=true
+            out_warn "******"
+            out_warn "NOTE: nginx configuration file check forced because with unavailable root directory it will always fails"
+            out_warn "******"
+        fi
+    fi
+
+    if [ ! -z "$VHOST_ERRORLOG_DIR" ] && [ ! -d "$VHOST_ERRORLOG_DIR" ]; then
+        if promptyn "error_log directory does not exists. Wanna create one? "; then
+            if mkdir -p "$VHOST_ERRORLOG_DIR" &> /dev/null; then
+                out_succ "Directory "$VHOST_ERRORLOG_DIR" successful created."
+            elif ! promptyn "Could not create directory. Wanna continue without creating?"; then
+                rm "$VHOST_ROOT" &> /dev/null
+                die "Aborting.."
+            fi
+        fi
+    fi
+
+    if [ ! -z "$VHOST_ACCESSLOG_DIR" ] && [ ! -d "$VHOST_ACCESSLOG_DIR" ]; then
+        if promptyn "error_log directory does not exists. Wanna create one? "; then
+            if mkdir -p "$VHOST_ACCESSLOG_DIR" &> /dev/null; then
+                out_succ "Directory "$VHOST_ACCESSLOG_DIR" successful created."
+            elif ! promptyn "Could not create directory. Wanna continue without creating? "; then
+                rm "$VHOST_ROOT" &> /dev/null
+                rm "$VHOST_ERRORLOG_DIR" &> /dev/null
+                die "Aborting.."
+            fi
+        fi
+    fi
+
+    if [ ! -z "$have_created_dirs" ]; then
+        if promptyn "Want change owner for newly created root directory? "; then
+            nginx_user=$(cat "$NGINX_CONF" | grep 'user' |
+                                             sed -e 's/^[ \t]*//' \
+                                             -e 's/user//g' \
+                                             -e 's/\;//g' \
+                                             -e 's/^[ \t]*//')
+            if chown -Rc "$nginx_user":"$nginx_user" "$VHOST_ROOT" &> /dev/null; then
+                out_succ "Successful changed owner"
+            else
+                out_warn "Could not change owner"
+            fi
+        fi
+    fi
+
+    cmd=$(echo "$VHOST_TEMPLATE" > "$AV_HOSTDIR"/"$vhost")
+    if $cmd &> /dev/null; then
+        out_succ "Vhost file successful created"
+    else
+        die "could not create vhost file"
+    fi
+
+    if promptyn "Want enable newly created vhost?"; then
+        vhost_enable
+    fi
+}
+#}}}
+
+#    FUNCTION: vhost_edit()#{{{
+# DESCRIPTION: edit virtual host
+# -----------------------------------------------------
+vhost_edit() {
+    if [ -z "$EDITOR" ]; then
+        die "\$EDITOR variable is empty or not set. Set it before edit vhost"
+    fi
+    $EDITOR "$AV_HOSTDIR"/"$vhost"
+}
+#}}}
+
+#    FUNCTION: vhost_delete()#{{{
+# DESCRIPTION: delete virtual host
+# -----------------------------------------------------
+vhost_remove() {
+    if promptyn "$(out_warn)Are you sure you want remove {"$vhost"}?"; then
+
+        if [ -f "$EN_HOSTDIR"/"$vhost" ]; then
+            if rm "$EN_HOSTDIR"/"$vhost" &> /dev/null; then
+                out_succ "Successful deleted {"$vhost"} from enabled vhosts"
+            else
+                die "Could not delete {"$EN_HOSTDIR"/"$vhost"}"
+            fi
+        fi
+
+        if [ -f "$AV_HOSTDIR"/"$vhost" ]; then
+            TEMPLATE=$(cat "$AV_HOSTDIR"/"$vhost" | sed -e "s/{HOST}/"$vhost"/g")
+            root=$(echo "$TEMPLATE" | grep "root" |
+                                            sed -e 's/root//g' \
+                                            -e 's/^[ \t]*//' \
+                                            -e 's/\;$//g' \
+                                            -e 's/\ .*//g')
+
+            if rm "$AV_HOSTDIR"/"$vhost" &> /dev/null; then
+                out_succ "Successful deleted {"$vhost"} from available vhosts"
+            else
+                die "Could not delete {"$EN_HOSTDIR"/"$vhost"}"
+            fi
+
+            if promptyn "Remove also vhost root directory?"; then
+                if rm -rf "$root" &> /dev/null; then
+                    out_succ "Successful removed {"$root"} directory"
+                else
+                    out_err "Could not remove {"$root"}. Maybe already removed?"
+                fi
+            fi
+        else
+            die "seems like {"$vhost"} already removed"
+        fi
+
+    else
+        die "" 0
+    fi
+}
+#}}}
+
+# Some required checks#{{{
+# -----------------------------------------------------
+
+#Check for root privileges
+if [[ "$EUID" -ne 0 ]]; then
+    die "Running this script under root user is required"
+fi
+
+# Checking for required programms for running script
+for requipment in ${requipments[@]}; do
+    expath=`which "$requipment"`
+    if [ -z "$expath" ] ; then
+        die "${requipment} which is required for run this script not found in \$PATH!"
+    fi
+done
+
+# If trying to do more that one action at the time - show error
+if [ "$OPT_COUNT" -gt 1 ]; then
+    die "You can only do one action with vhost at the time!"
+fi
+
+#}}}
+
+# Main action goes here#{{{
+# -----------------------------------------------------
+
+# if -l/--list used
+if [ ! -z $flag_list ]; then
+    if [ -z $flag_action ]; then
+        die "you should specify what to list. See --help for details"
+    fi
+    echo "Available for "$flag_action" vhosts:"
+    iter=1
+    for fname in "$DIR2LIST"/*; do
+        echo "$iter) $fname"
+        ((iter++))
+    done
+    exit 0
+fi
+
+# If no any virtual host specified with -v/--vhost - list available
+# based on action
+if [ -z "$vhost" ] || [ ! -z "$listdir" ] && [ ! -z "$DIR2LIST" ]; then
+    if [ ! -z $flag_batch ]; then
+        die "can't run in batch mode without host specified"
+    fi
+    PS3="Type a host number to "$flag_action" or any other key to exit: "
+    select fname in "$DIR2LIST"/*; do
+        if [ -n "$fname" ]; then
+            vhost=${fname##*/} # only file name needed
+        fi
+        break
+    done
+fi
+
+# Determine action and run appropriate function
+case "$flag_action" in
+    'enable')
+        vhost_enable
+        shift;;
+    'disable')
+        vhost_disable
+        shift;;
+    'create')
+        vhost_create
+        shift;;
+    'edit')
+        vhost_edit
+        shift;;
+    'remove')
+        vhost_remove
+        shift;;
+esac
+
+if [ -z "$nginx_restart" ]; then
+    if promptyn "Restart nginx to apply changes?" ; then
+        nginx_restart=true
+    else
+        die
+    fi
+fi
+
+if [ ! -z "$nginx_restart" ]; then
+    if service nginx restart &> /dev/null ; then
+        out_succ "Nginx successful restarted."
+    else
+        die "could not restart nginx"
+    fi
+fi
+#}}}
