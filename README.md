@@ -1,4 +1,7 @@
-nsvhm
+Nginx simple virtual host manager
 =====
 
-Nginx Simple Virtual Host Manager
+## Changelog ##
+
+### Version 0.1 ###
+* Initial version
