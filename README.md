@@ -12,9 +12,11 @@ hosts.
 Installation is pretty simple: download, make executable and move in any $PATH
 directory. I prefer /usr/bin.
 
+    ```bash
     wget https://raw.githubusercontent.com/bosha/nsvhm/master/nsvhm
     chmod +x
     mv nvshm /usr/bin
+    ```
 
 You can set SUID bit on script, but I don't recomend do this because I not
 enough test it.
@@ -34,6 +36,7 @@ if you placed nginx configuration in non-standart directory or/and
 
 First of all - see all available options:
 
+    ```bash
     user@hostname:~$ nsvhm --help
     usage: "nsvhm" [options]
 
@@ -52,9 +55,11 @@ First of all - see all available options:
     -E, --edit              Edit host
     -R, --remove            Remove host
     user@hostname:~$
+    ```
 
 ### Enable virtual host ###
 
+    ```bash
     user@hostname:~$ nsvhm --enable
     1) /etc/nginx/sites-available/default
     2) /etc/nginx/sites-available/example.com
@@ -64,9 +69,11 @@ First of all - see all available options:
     Restart nginx to apply changes? (y/n): y
     Nginx successful restarted.
     user@hostname:~$
+    ```
 
 ### Disable virtual host ###
 
+    ```bash
     user@hostname:~$ nsvhm --disable
     1) /etc/nginx/sites-available/default
     2) /etc/nginx/sites-available/example.com
@@ -75,11 +82,13 @@ First of all - see all available options:
     Restart nginx to apply changes? (y/n): y
     Nginx successful restarted.
     user@hostname:~$
+    ```
 
 ### Edit virtual host ###
 
 Will open virtual host for editing using $EDITOR:
 
+    ```bash
     user@hostname:~$ nsvhm --edit
     1) /etc/nginx/sites-available/default
     2) /etc/nginx/sites-available/example.com
@@ -87,6 +96,7 @@ Will open virtual host for editing using $EDITOR:
     Restart nginx to apply changes? (y/n): y
     Nginx successful restarted.
     user@hostname:~$
+    ```
 
 
 ### Create virtual host ###
@@ -94,6 +104,7 @@ Will open virtual host for editing using $EDITOR:
 Template can be specified inside script in VHOST_TEMPLATE variable, or can be
 specified with --template option:
 
+    ```bash
     user@hostname:~$ nsvhm --create
     Vhost name not defined. Enter one (Ctrl-C to abort): example.com
     Root directory does not exists. Wanna create one? (y/n): y
@@ -109,9 +120,11 @@ specified with --template option:
     Restart nginx to apply changes? (y/n): y
     Nginx successful restarted.
     user@hostname:~$
+    ```
 
 ### Remove virtual host ###
 
+    ```bash
     user@hostname:~$ nsvhm --remove
     1) /etc/nginx/sites-available/default
     2) /etc/nginx/sites-available/example.com
@@ -124,17 +137,20 @@ specified with --template option:
     Restart nginx to apply changes? (y/n): y
     Nginx successful restarted.
     user@hostname:~$
+    ```
 
 ### Other ###
 
 If you want to avoid asking to specify virtual host name - you can specify it
 with --vhost option:
 
+    ```bash
     user@hostname:~$ nsvhm --disable --vhost example.com
     {example.com} successful disabled!
     Restart nginx to apply changes? (y/n): y
     Nginx successful restarted.
     user@hostname:~$
+    ```
 
 Also, if you want to use this script from another - you can use --batch option.
 Note that for any questions 'yes' will be chosen as answer, and some options
@@ -142,6 +158,7 @@ cannot be specified with command line arguments (for example: root, error_log,
 access log directories will be created if not exists), and it cannot be
 configured now:
 
+    ```bash
     user@hostname:~$ nsvhm --create --vhost example.com --batch
     Directory /var/www/example.com/html successful created.
     Directory /var/www/example.com/log successful created.
@@ -151,6 +168,7 @@ configured now:
     Configuration test - [OK]
     Nginx successful restarted.
     user@hostname:~$
+    ```
 
 ## Getting help ##
 
